@@ -1,0 +1,83 @@
+-- ════════════════════════════════════════════════════════════════════════════════════
+-- ███ ACTUALIZAR PRODUCCIÓN — sm_seguridad (AZURE) — Seguridad y menú propios de smb_react ███
+-- ════════════════════════════════════════════════════════════════════════════════════
+-- Este archivo NO se ejecuta: es la guía. Los scripts se corren en el orden de su número.
+--
+-- QUÉ HACE EL CONJUNTO
+--   Crea el esquema seg (tablas nuevas) con el menú de 4 niveles (Menú → Submenú → Módulo → Submódulo),
+--   permisos por clave, roles globales y asignación usuario + rol + negocio, y migra a ese modelo los
+--   roles y permisos de las pantallas de smb_react.
+--   NO modifica nada del esquema sct que usa smb-laravel (solo lo lee). Laravel no se entera.
+--
+-- ─── ORDEN ──────────────────────────────────────────────────────────────────────────
+--
+--   01  Inventario previo (solo lectura)     Ver qué roles/usuarios de prod se van a migrar. No escribe.
+--   02  01_seg_Estructura                    Esquema seg y tablas.
+--   03  02_seg_Catalogo                      Menús, módulos, pantallas, permisos y equivalencias.
+--   04  03_seg_Migracion                     Roles, permisos por rol y asignaciones desde sct.
+--   05  04_seg_ReorganizarMenu               Estructura final del menú e íconos.
+--   06  05_seg_PermisoEstructuraMenu         Permiso de la pestaña "Estructura del menú" para Sistemas.
+--
+--   Después de los scripts: publicar smb_net y luego smb_react (ver "PUBLICACIÓN" abajo).
+--
+-- ─── CÓMO CORRER CADA SCRIPT (02 a 06) ──────────────────────────────────────────────
+--
+--   1. Abrir el script en una ventana NUEVA de consulta, conectado a sm_seguridad de PRODUCCIÓN.
+--   2. Ejecutarlo completo: corre dentro de una transacción y NO confirma solo.
+--   3. Revisar los SELECT de verificación (abajo, qué mirar en cada uno).
+--   4. En LA MISMA ventana ejecutar COMMIT; (o ROLLBACK; si algo no cuadra).
+--   5. Confirmar que no quedó transacción abierta: SELECT @@TRANCOUNT; debe dar 0.
+--      Una transacción abierta en sm_seguridad bloquea el login (401 a los 30 s).
+--   Los scripts son idempotentes: si se corre dos veces, no duplica nada.
+--
+-- ─── QUÉ REVISAR EN CADA UNO ────────────────────────────────────────────────────────
+--
+--   01  Inventario: anotar los roles que tienen pantallas de smb_react y si alguno tiene permisos
+--       distintos según el negocio (se unificarán en un solo rol, ver 04).
+--
+--   02  Estructura: 10 tablas en el esquema seg. El control "debe salir vacío" (FK hacia sct) VACÍO.
+--
+--   03  Catálogo: los dos AVISOS del inicio VACÍOS (si sale un path o privilegio, esa pantalla no existe
+--       en sct de prod y la migración no la va a encontrar). Conteos: 6 menús, 1 submenú, 7 módulos,
+--       9 submódulos, 22 permisos, 22 equivalencias. (Los menús se reorganizan en el 05.)
+--
+--   04  Migración (EL MÁS IMPORTANTE):
+--       - "A. PIERDE" debe salir VACÍO: nadie pierde accesos.
+--       - "A2. GANA por unificar": roles con el mismo nombre se unen en UNO (unión de permisos);
+--         aquí se ve quién gana algo en un negocio donde tenía menos. Revisar; se ajusta luego en Roles.
+--       - Roles con observación "REVISAR": son los unificados.
+--       - B y C son informativos (privilegios que hoy llegan desde otro negocio por un defecto que se
+--         corrige; roles inactivos que no se migran).
+--       - Verificar que el rol que hoy entra a Seguridad (ej. "Administrador de Seguridad") quedó con
+--         admin.seguridad.ver: si nadie lo tiene, nadie podrá administrar el modelo nuevo.
+--       - Si después de correrlo cambian permisos en Laravel/sct antes de publicar, se puede volver a
+--         correr: reconstruye todo, siempre que nadie haya editado aún desde la administración nueva.
+--
+--   05  Menú: el AVISO de módulos no encontrados VACÍO; el control de menús viejos VACÍO; revisar el
+--       árbol final (Operaciones, Comercial, Finanzas, Capital Humano, Auditoría, Administración, Reportes)
+--       y que cada pantalla tenga ícono.
+--
+--   06  Permiso de Estructura: ANTES de correrlo, revisar @roles: debe tener el NOMBRE del rol de
+--       Sistemas tal como quedó en prod (hoy 'CDI Sistemas'). Se asigna por nombre, no por código.
+--       Si sale "NO - le falta admin.seguridad.ver" para alguien de Sistemas, esa persona no entra a
+--       Seguridad: darle "Ver Seguridad" desde Roles después de publicar, o asignarle el rol que lo tenga.
+--
+-- ─── PUBLICACIÓN ────────────────────────────────────────────────────────────────────
+--
+--   1. Scripts 02 a 06 confirmados (mientras tanto smb_react/smb_net de prod siguen funcionando con sct:
+--      nadie lee todavía las tablas nuevas).
+--   2. Publicar smb_net (lee el esquema seg, valida permisos por clave y por negocio).
+--   3. Publicar smb_react (menú de 4 niveles, permisos por clave, administración nueva).
+--   smb_net y smb_react deben publicarse juntos: el smb_react nuevo usa endpoints que solo tiene el smb_net
+--   nuevo, y el smb_net nuevo ya no tiene /api/auth/privilegios que usaba el smb_react anterior.
+--
+-- ─── SI HAY QUE VOLVER ATRÁS ────────────────────────────────────────────────────────
+--
+--   Antes de publicar: no hace falta nada; el esquema seg no lo usa nadie y sct queda intacto.
+--   Después de publicar: volver a publicar las versiones anteriores de smb_net y smb_react; siguen
+--   funcionando con sct, que no se tocó. El esquema seg puede quedar (no estorba) o borrarse.
+--
+-- ─── QUÉ NO CORRER ──────────────────────────────────────────────────────────────────
+--
+--   Database/sm_seguridad/Jerarquia de menu/01_sm_seguridad_JerarquiaMenu.sql es un borrador OBSOLETO
+--   (agregaba objetos sobre las tablas de Laravel). No forma parte de esta actualización.
